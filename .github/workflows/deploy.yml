@@ -1,0 +1,93 @@
+name: Deploy
+
+on:
+  # Option 1: Manual trigger via GitHub UI
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy (api, commit-worker, user-worker)'
+        required: true
+        type: choice
+        options:
+          - api
+          - commit-worker
+          - user-worker
+      version:
+        description: 'Version to deploy (e.g., 1.2.3)'
+        required: true
+
+  # Option 2: Automated trigger from main repo (via repository_dispatch)
+  repository_dispatch:
+    types: [deploy]
+
+  # Option 3: Trigger on tag push (if tags are pushed to infra repo)
+  # Note: Usually tags are in main repo, but this allows flexibility
+  push:
+    tags:
+      - 'api-v*.*.*'
+      - 'commit-worker-v*.*.*'
+      - 'user-worker-v*.*.*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Extract service and version
+        id: extract
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Manual trigger: Get from inputs
+            echo "SERVICE=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            # Automated trigger: Get from payload
+            echo "SERVICE=${{ github.event.client_payload.service }}" >> $GITHUB_OUTPUT
+            echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+          else
+            # Tag push: Extract from tag (api-v1.2.3)
+            TAG=${GITHUB_REF#refs/tags/}
+            if [[ $TAG =~ ^(.+)-v(.+)$ ]]; then
+              echo "SERVICE=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+              echo "VERSION=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Error: Invalid tag format"
+              exit 1
+            fi
+          fi
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Verify image exists
+        run: |
+          REGION=${{ secrets.GCP_REGION }}
+          PROJECT_ID=${{ secrets.PROJECT_ID }}
+          REPOSITORY=github-scraper
+          SERVICE=${{ steps.extract.outputs.SERVICE }}
+          VERSION=${{ steps.extract.outputs.VERSION }}
+
+          if ! gcloud artifacts docker images describe \
+            ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${VERSION} \
+            --project=${PROJECT_ID} &>/dev/null; then
+            echo "❌ Error: Image ${SERVICE}:${VERSION} not found in registry"
+            echo "   Build it first in github-scraper repo:"
+            echo "   git tag ${SERVICE}-v${VERSION} && git push origin ${SERVICE}-v${VERSION}"
+            exit 1
+          fi
+          echo "✅ Found ${SERVICE}:${VERSION}"
+
+      - name: Deploy
+        run: |
+          export PROJECT_ID=${{ secrets.PROJECT_ID }}
+          export REGION=${{ secrets.GCP_REGION }}
+          ./scripts/deploy/deploy.sh ${{ steps.extract.outputs.SERVICE }} ${{ steps.extract.outputs.VERSION }}
+
+      # Note: Health checks are implemented in deploy.sh script
+      # For API service, it checks /health endpoint after deployment
+      # For workers, health checks aren't applicable (they run on schedule)
+
