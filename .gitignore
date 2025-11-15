@@ -1,0 +1,36 @@
+# Generated Cloud Run configs (from templates)
+cloudrun.yaml
+cloudrun-job-*.yaml
+*.yaml
+!*.template
+!*.yaml.template
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Secrets (should never be committed, but extra safety)
+secrets/
+*.pem
+*.key
+*.crt
