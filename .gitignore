@@ -34,3 +34,8 @@ secrets/
 *.pem
 *.key
 *.crt
+
+# GCP Service Account Keys (never commit!)
+*-key.json
+service-account*.json
+github-actions-key.json

@@ -1,0 +1,144 @@
+#!/bin/bash
+# Cloud Scheduler setup for Two-Worker Architecture
+# - Commit Worker: Every 15 minutes (processes repos)
+# - User Worker: Every 4 hours (syncs users via API)
+# Stays within free tier: 2 scheduler jobs (free tier allows 3)
+
+set -e
+
+PROJECT_ID="${PROJECT_ID:-YOUR_GCP_PROJECT_ID}"
+REGION="${REGION:-us-east1}"
+COMMIT_JOB_NAME=${COMMIT_JOB_NAME:-"commit-worker"}
+USER_JOB_NAME=${USER_JOB_NAME:-"user-worker"}
+COMMIT_SCHEDULER_NAME="${COMMIT_JOB_NAME}-scheduler"
+USER_SCHEDULER_NAME="${USER_JOB_NAME}-scheduler"
+
+# Get the service account email (default compute service account)
+PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
+SERVICE_ACCOUNT_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+echo "⏰ Setting up Cloud Schedulers for Two-Worker Architecture"
+echo "=========================================================="
+echo ""
+
+# ============================================================
+# 1. Commit Worker Scheduler (Every 15 minutes)
+# ============================================================
+echo "1️⃣  Setting up Commit Worker Scheduler..."
+echo "   Job: ${COMMIT_JOB_NAME}"
+echo "   Schedule: Every 15 minutes (*/15 * * * *)"
+echo ""
+
+if gcloud scheduler jobs describe ${COMMIT_SCHEDULER_NAME} \
+  --location=${REGION} \
+  --project=${PROJECT_ID} &>/dev/null; then
+  echo "⚠️  Scheduler ${COMMIT_SCHEDULER_NAME} already exists. Updating..."
+  gcloud scheduler jobs update http ${COMMIT_SCHEDULER_NAME} \
+    --location=${REGION} \
+    --project=${PROJECT_ID} \
+    --schedule="*/15 * * * *" \
+    --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${COMMIT_JOB_NAME}:run" \
+    --http-method=POST \
+    --oauth-service-account-email=${SERVICE_ACCOUNT_EMAIL} \
+    --time-zone="UTC" \
+    --attempt-deadline=1800s \
+    --max-retry-attempts=0 \
+    --max-retry-duration=0s
+else
+  echo "✅ Creating new scheduler ${COMMIT_SCHEDULER_NAME}..."
+  gcloud scheduler jobs create http ${COMMIT_SCHEDULER_NAME} \
+    --location=${REGION} \
+    --project=${PROJECT_ID} \
+    --schedule="*/15 * * * *" \
+    --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${COMMIT_JOB_NAME}:run" \
+    --http-method=POST \
+    --oauth-service-account-email=${SERVICE_ACCOUNT_EMAIL} \
+    --time-zone="UTC" \
+    --attempt-deadline=1800s \
+    --max-retry-attempts=0 \
+    --max-retry-duration=0s
+fi
+
+echo "✅ Commit Worker Scheduler configured!"
+echo ""
+
+# ============================================================
+# 2. User Worker Scheduler (Every 4 hours)
+# ============================================================
+echo "2️⃣  Setting up User Worker Scheduler..."
+echo "   Job: ${USER_JOB_NAME}"
+echo "   Schedule: Every 4 hours (0 */4 * * *)"
+echo ""
+
+if gcloud scheduler jobs describe ${USER_SCHEDULER_NAME} \
+  --location=${REGION} \
+  --project=${PROJECT_ID} &>/dev/null; then
+  echo "⚠️  Scheduler ${USER_SCHEDULER_NAME} already exists. Updating..."
+  gcloud scheduler jobs update http ${USER_SCHEDULER_NAME} \
+    --location=${REGION} \
+    --project=${PROJECT_ID} \
+    --schedule="0 */4 * * *" \
+    --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${USER_JOB_NAME}:run" \
+    --http-method=POST \
+    --oauth-service-account-email=${SERVICE_ACCOUNT_EMAIL} \
+    --time-zone="UTC" \
+    --attempt-deadline=1800s \
+    --max-retry-attempts=0 \
+    --max-retry-duration=0s
+else
+  echo "✅ Creating new scheduler ${USER_SCHEDULER_NAME}..."
+  gcloud scheduler jobs create http ${USER_SCHEDULER_NAME} \
+    --location=${REGION} \
+    --project=${PROJECT_ID} \
+    --schedule="0 */4 * * *" \
+    --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${USER_JOB_NAME}:run" \
+    --http-method=POST \
+    --oauth-service-account-email=${SERVICE_ACCOUNT_EMAIL} \
+    --time-zone="UTC" \
+    --attempt-deadline=1800s \
+    --max-retry-attempts=0 \
+    --max-retry-duration=0s
+fi
+
+echo "✅ User Worker Scheduler configured!"
+echo ""
+
+# ============================================================
+# Summary
+# ============================================================
+echo "✅ Both Cloud Schedulers configured successfully!"
+echo ""
+echo "📊 Free Tier Status:"
+echo "   - Using 2 of 3 free scheduler jobs ✅"
+echo "   - Commit Worker: Every 15 minutes (*/15 * * * *)"
+echo "   - User Worker: Every 4 hours (0 */4 * * *)"
+echo ""
+echo "💰 Estimated Monthly Usage (assuming 30s commit-worker, 20s user-worker):"
+echo "   - Commit Worker: 2,880 executions/month"
+echo "   - User Worker: 180 executions/month"
+echo "   - Total: 3,060 executions/month"
+echo "   - vCPU-seconds: ~86,400/month ✅ (within 180,000 free tier)"
+echo "   - GB-seconds: ~43,200/month ✅ (within 360,000 free tier)"
+echo ""
+echo "   💰 Estimated Monthly Cost: \$0.00 (FULLY COVERED BY FREE TIER!)"
+echo ""
+echo "🔍 Useful commands:"
+echo ""
+echo "   View schedulers:"
+echo "   - gcloud scheduler jobs describe ${COMMIT_SCHEDULER_NAME} --location=${REGION}"
+echo "   - gcloud scheduler jobs describe ${USER_SCHEDULER_NAME} --location=${REGION}"
+echo ""
+echo "   Pause/Resume schedulers:"
+echo "   - gcloud scheduler jobs pause ${COMMIT_SCHEDULER_NAME} --location=${REGION}"
+echo "   - gcloud scheduler jobs resume ${COMMIT_SCHEDULER_NAME} --location=${REGION}"
+echo "   - gcloud scheduler jobs pause ${USER_SCHEDULER_NAME} --location=${REGION}"
+echo "   - gcloud scheduler jobs resume ${USER_SCHEDULER_NAME} --location=${REGION}"
+echo ""
+echo "   Manual triggers:"
+echo "   - gcloud run jobs execute ${COMMIT_JOB_NAME} --region=${REGION}"
+echo "   - gcloud run jobs execute ${USER_JOB_NAME} --region=${REGION}"
+echo ""
+echo "   Delete schedulers:"
+echo "   - gcloud scheduler jobs delete ${COMMIT_SCHEDULER_NAME} --location=${REGION}"
+echo "   - gcloud scheduler jobs delete ${USER_SCHEDULER_NAME} --location=${REGION}"
+
