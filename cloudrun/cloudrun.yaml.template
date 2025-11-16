@@ -103,8 +103,6 @@ spec:
                 secretKeyRef:
                   name: backend-url
                   key: latest
-            - name: POPULATE_DEMO_REPOS
-              value: 'true'
   traffic:
     - percent: 100
       latestRevision: true

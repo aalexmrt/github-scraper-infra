@@ -40,52 +40,106 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Manual trigger: Get from inputs
-            echo "SERVICE=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            SERVICE="${{ github.event.inputs.service }}"
+            VERSION="${{ github.event.inputs.version }}"
+            # If api is deployed manually, deploy all services
+            if [ "$SERVICE" = "api" ]; then
+              echo "DEPLOY_ALL=true" >> $GITHUB_OUTPUT
+            else
+              echo "DEPLOY_ALL=false" >> $GITHUB_OUTPUT
+            fi
           elif [ "${{ github.event_name }}" == "repository_dispatch" ]; then
             # Automated trigger: Get from payload
-            echo "SERVICE=${{ github.event.client_payload.service }}" >> $GITHUB_OUTPUT
-            echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+            SERVICE="${{ github.event.client_payload.service }}"
+            VERSION="${{ github.event.client_payload.version }}"
+            # Main repo builds all services when api tag is pushed
+            # It sends separate dispatch events for each service
+            # So we deploy only the specific service requested
+            echo "DEPLOY_ALL=false" >> $GITHUB_OUTPUT
           else
             # Tag push: Extract from tag (api-v1.2.3)
             TAG=${GITHUB_REF#refs/tags/}
             if [[ $TAG =~ ^(.+)-v(.+)$ ]]; then
-              echo "SERVICE=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
-              echo "VERSION=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
+              SERVICE="${BASH_REMATCH[1]}"
+              VERSION="${BASH_REMATCH[2]}"
+              # If api tag is pushed, deploy all services
+              if [ "$SERVICE" = "api" ]; then
+                echo "DEPLOY_ALL=true" >> $GITHUB_OUTPUT
+              else
+                echo "DEPLOY_ALL=false" >> $GITHUB_OUTPUT
+              fi
             else
               echo "❌ Error: Invalid tag format"
               exit 1
             fi
           fi
+          echo "SERVICE=${SERVICE}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v1
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Verify image exists
+      - name: Verify images exist
         run: |
           REGION=${{ secrets.GCP_REGION }}
           PROJECT_ID=${{ secrets.PROJECT_ID }}
           REPOSITORY=github-scraper
           SERVICE=${{ steps.extract.outputs.SERVICE }}
           VERSION=${{ steps.extract.outputs.VERSION }}
-
-          if ! gcloud artifacts docker images describe \
-            ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${VERSION} \
-            --project=${PROJECT_ID} &>/dev/null; then
-            echo "❌ Error: Image ${SERVICE}:${VERSION} not found in registry"
-            echo "   Build it first in github-scraper repo:"
-            echo "   git tag ${SERVICE}-v${VERSION} && git push origin ${SERVICE}-v${VERSION}"
-            exit 1
+          DEPLOY_ALL=${{ steps.extract.outputs.DEPLOY_ALL }}
+          
+          # Determine which services to verify
+          if [ "$DEPLOY_ALL" = "true" ]; then
+            SERVICES=("api" "commit-worker" "user-worker")
+            echo "🔍 Verifying all service images (api, commit-worker, user-worker)..."
+          else
+            SERVICES=("${SERVICE}")
+            echo "🔍 Verifying ${SERVICE} image..."
           fi
-          echo "✅ Found ${SERVICE}:${VERSION}"
+          
+          # Verify each service image exists
+          for SVC in "${SERVICES[@]}"; do
+            if ! gcloud artifacts docker images describe \
+              ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SVC}:${VERSION} \
+              --project=${PROJECT_ID} &>/dev/null; then
+              echo "❌ Error: Image ${SVC}:${VERSION} not found in registry"
+              echo "   Build it first in github-scraper repo:"
+              echo "   git tag ${SVC}-v${VERSION} && git push origin ${SVC}-v${VERSION}"
+              exit 1
+            fi
+            echo "✅ Found ${SVC}:${VERSION}"
+          done
 
-      - name: Deploy
+      - name: Deploy services
         run: |
           export PROJECT_ID=${{ secrets.PROJECT_ID }}
           export REGION=${{ secrets.GCP_REGION }}
-          ./scripts/deploy/deploy.sh ${{ steps.extract.outputs.SERVICE }} ${{ steps.extract.outputs.VERSION }}
+          SERVICE=${{ steps.extract.outputs.SERVICE }}
+          VERSION=${{ steps.extract.outputs.VERSION }}
+          DEPLOY_ALL=${{ steps.extract.outputs.DEPLOY_ALL }}
+          
+          # Determine which services to deploy
+          if [ "$DEPLOY_ALL" = "true" ]; then
+            SERVICES=("api" "commit-worker" "user-worker")
+            echo "🚀 Deploying all services (api, commit-worker, user-worker) with version ${VERSION}..."
+          else
+            SERVICES=("${SERVICE}")
+            echo "🚀 Deploying ${SERVICE} with version ${VERSION}..."
+          fi
+          
+          # Deploy each service
+          for SVC in "${SERVICES[@]}"; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📦 Deploying ${SVC}:${VERSION}"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            ./scripts/deploy/deploy.sh ${SVC} ${VERSION}
+          done
+          
+          echo ""
+          echo "✅ All deployments completed successfully"
 
       # Note: Health checks are implemented in deploy.sh script
       # For API service, it checks /health endpoint after deployment

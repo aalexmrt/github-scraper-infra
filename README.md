@@ -28,16 +28,20 @@ Developer creates tag (api-v1.2.3)
     ↓
 Main repo: Build workflow triggers
     ↓
-Builds Docker image → Pushes to Artifact Registry
+Builds ALL Docker images (api, commit-worker, user-worker)
     ↓
-Automatically triggers infra repo deployment
+Pushes all images to Artifact Registry
     ↓
-Infra repo: Deploy workflow validates image exists
+Automatically triggers infra repo deployments (one per service)
     ↓
-Deploys to Cloud Run → Health checks run
+Infra repo: Deploy workflow validates images exist
     ↓
-Service is live ✅
+Deploys all services to Cloud Run → Health checks run
+    ↓
+All services are live ✅
 ```
+
+**Note**: When you tag `api-v*.*.*`, the main repo builds **all three services** (api, commit-worker, user-worker) with the same version. The infra repo then deploys all three services automatically.
 
 ## 🚀 Quick Start
 
@@ -55,6 +59,8 @@ Service is live ✅
 1. Go to Actions → "Deploy" workflow
 2. Click "Run workflow"
 3. Select service and enter version
+   - **If you select `api`**: All three services (api, commit-worker, user-worker) will be deployed
+   - **If you select `commit-worker` or `user-worker`**: Only that specific service will be deployed
 4. Click "Run workflow"
 
 ### Automated Deployment
@@ -62,16 +68,22 @@ Service is live ✅
 Deployment happens automatically when you create a tag in the main repository:
 
 ```bash
-# In main repo
+# In main repo - Tag API (builds ALL services)
 git tag api-v1.2.3
 git push origin api-v1.2.3
 
 # This automatically:
-# 1. Builds image in main repo
-# 2. Pushes to Artifact Registry
-# 3. Triggers deployment in infra repo
-# 4. Deploys to Cloud Run
+# 1. Builds ALL images (api, commit-worker, user-worker) in main repo
+# 2. Pushes all images to Artifact Registry
+# 3. Triggers deployments in infra repo (one per service)
+# 4. Deploys all services to Cloud Run
+
+# Or deploy individual services:
+git tag commit-worker-v1.5.0  # Only builds commit-worker
+git tag user-worker-v2.0.1     # Only builds user-worker
 ```
+
+**Important**: When you tag `api-v*.*.*`, **all three services** are built and deployed with the same version. This ensures version consistency across all services since they share the same codebase.
 
 ## 📁 Repository Structure
 
@@ -141,11 +153,16 @@ Versions are managed via git tags in the main repository:
 ### Creating a Release
 
 ```bash
-# In main repo
+# In main repo - Recommended: Tag API to deploy all services
 git tag api-v1.2.3
 git push origin api-v1.2.3
 
-# Deployment happens automatically
+# This builds and deploys ALL services (api, commit-worker, user-worker)
+# with version 1.2.3
+
+# Or deploy individual services if needed:
+git tag commit-worker-v1.5.0
+git push origin commit-worker-v1.5.0
 ```
 
 ## 🔄 Rollback
